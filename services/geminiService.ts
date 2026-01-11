@@ -1,5 +1,5 @@
 import { GoogleGenAI, FunctionDeclaration, Type, Tool } from "@google/genai";
-import { Itinerary, TravelType, UserProfile } from "../types";
+import { Itinerary, TravelType, UserProfile, Activity } from "../types";
 
 // Tool definition to allow the AI to update the structured itinerary state
 const updateItineraryTool: FunctionDeclaration = {
@@ -92,7 +92,34 @@ const suggestNextStepsTool: FunctionDeclaration = {
   }
 };
 
-const tools: Tool[] = [{ functionDeclarations: [updateItineraryTool, searchFlightsTool, suggestNextStepsTool] }];
+const presentOptionsTool: FunctionDeclaration = {
+  name: "presentOptions",
+  description: "Display 3 selectable options to the user. MANDATORY for flights and hotels unless the user explicitly specified a specific flight/hotel.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      options: {
+        type: Type.ARRAY,
+        description: "Exactly 3 distinct options for the user to pick from.",
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING },
+            subTitle: { type: Type.STRING },
+            description: { type: Type.STRING },
+            cost: { type: Type.STRING },
+            time: { type: Type.STRING },
+            category: { type: Type.STRING, description: "flight, accommodation, dining, activity" },
+            imageQuery: { type: Type.STRING }
+          }
+        }
+      }
+    },
+    required: ["options"]
+  }
+};
+
+const tools: Tool[] = [{ functionDeclarations: [updateItineraryTool, searchFlightsTool, suggestNextStepsTool, presentOptionsTool] }];
 
 const MODEL_NAME = "gemini-3-flash-preview";
 
@@ -133,27 +160,28 @@ export class GeminiService {
 
         **Interaction Protocol**:
         1.  **Discovery Phase**: Do NOT generate a full itinerary immediately. You MUST ask clarifying questions first to understand the user's needs.
-            - Ask for: Travel Dates, Duration, Destination (if unknown), Party Size (Adults/Kids), and Vibe (Relaxed, Adventure, Luxury, etc.).
-            - Only after you have these details should you start building the plan.
         
         2.  **Drafting the Plan**:
             - **CRITICAL**: Always include a HOTEL/ACCOMMODATION option in the itinerary by default.
-            - **COSTS**: You MUST provide an estimated cost for EVERY activity (e.g., "$25", "Free", "$200/night"). You MUST also calculate and provide the \`totalEstimatedCost\` for the entire trip.
-            - When you have enough info, use the \`updateItinerary\` tool to visualize the plan on the right side of the screen.
-            - Populate the \`imageQuery\` field for every activity so the user sees photos.
+            - **COSTS**: You MUST provide an estimated cost for EVERY activity (e.g., "$25", "Free", "$200/night").
+            - populate \`imageQuery\` for every activity.
         
-        3.  **Presentation (Chat Output)**:
-            - Summarize your recommendations in the chat.
-            - Use **Markdown** to make it readable (Bold headings, bullet points).
-            - **HYPERLINKS**: When mentioning specific hotels, restaurants, or attractions, you MUST try to provide a Markdown link (e.g., \`[The Ritz Paris](https://www.ritzparis.com)\`).
-            - **SUGGESTIONS**: You MUST use the \`suggestNextSteps\` tool at the end of every turn to offer 2-4 actionable options to the user. For example: "Swap the hotel", "Find a cheaper flight", "Add a museum tour".
-            - Ask for feedback: "How does this look?" "Would you like to adjust the dinner reservation?"
+        3.  **Choice Cards (MANDATORY FOR FLIGHTS & HOTELS)**:
+            - When adding a flight or hotel to the plan, you **MUST** first offer 3 distinct options to the user.
+            - Use the \`presentOptions\` tool.
+            - Do NOT call \`updateItinerary\` for the flight/hotel until the user has selected one.
+            - Providing a single option is a failure of your duty as a concierge.
+
+        4.  **Presentation & Output Rules**:
+            - Speak ONLY in natural language to the user.
+            - **NEVER output raw JSON, XML, or code blocks.**
+            - If you use a tool (like updateItinerary or suggestNextSteps), do NOT show the arguments to the user. Just execute the tool and provide a verbal summary.
+            - Summarize recommendations in chat using Markdown.
+            - Use the \`suggestNextSteps\` tool at the end of every turn.
         
         **Itinerary Data Rules**:
         - \`category\`: strictly use 'flight', 'accommodation', 'dining', 'activity', 'transit', 'logistics'.
-        - \`imageQuery\`: Provide a simple keyword for the location/activity.
         - \`bookingStatus\`: Start as 'suggested'.
-        - \`isLocked\`: If the user locks an activity, you MUST preserve it in future updates.
         `,
         tools: tools,
       },
@@ -165,7 +193,8 @@ export class GeminiService {
   async sendMessage(
     message: string, 
     onItineraryUpdate: (itinerary: Partial<Itinerary>) => void,
-    onSuggestionsUpdate?: (suggestions: string[]) => void
+    onSuggestionsUpdate?: (suggestions: string[]) => void,
+    onOptionsUpdate?: (options: Activity[]) => void
   ): Promise<string> {
     if (!this.chatSession) {
       throw new Error("Chat session not initialized");
@@ -220,6 +249,16 @@ export class GeminiService {
                   name: call.name,
                   response: { result: "Suggestions received." }
               });
+          } else if (call.name === "presentOptions") {
+              const args = call.args as any;
+              if (args.options && Array.isArray(args.options)) {
+                  if (onOptionsUpdate) onOptionsUpdate(args.options);
+              }
+              functionResponses.push({
+                  id: call.id,
+                  name: call.name,
+                  response: { result: "Options displayed to user for selection." }
+              });
           }
         }
 
@@ -228,7 +267,15 @@ export class GeminiService {
         });
       }
 
-      return result.text || "I've updated your plan.";
+      let text = result.text || "";
+      
+      // Cleanup: Remove any JSON code blocks that might have leaked from the model thought process
+      text = text.replace(/```json\s*\{[\s\S]*?\}\s*```/g, '');
+      text = text.replace(/```\s*\{[\s\S]*?\}\s*```/g, '');
+      // Remove standalone JSON objects that are not in code blocks (heuristics)
+      text = text.replace(/^\s*\{\s*"suggestions"[\s\S]*\}\s*$/g, '');
+
+      return text.trim() || "I've updated your plan.";
     } catch (error) {
       console.error("Gemini Error:", error);
       return "I'm having trouble connecting to the travel network right now. Please try again.";

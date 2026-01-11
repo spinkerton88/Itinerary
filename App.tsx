@@ -18,11 +18,12 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [userProfile, setUserProfile] = useState<UserProfile>({ loyaltyCards: [] });
 
-  // Trip Context State - Defaulted to FALSE (Collapsed) as requested
+  // Trip Context State
   const [isSetupOpen, setIsSetupOpen] = useState(false);
   
-  // Suggestions State
+  // Suggestions & Options State
   const [selectedSuggestions, setSelectedSuggestions] = useState<Set<string>>(new Set());
+  const [pendingChoices, setPendingChoices] = useState<Activity[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -33,6 +34,13 @@ function App() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, isTyping]);
+
+  // Mobile UX: Auto-switch to itinerary view when choice cards appear
+  useEffect(() => {
+    if (pendingChoices.length > 0 && window.innerWidth < 768) {
+        setActiveTab('itinerary');
+    }
+  }, [pendingChoices]);
 
   useEffect(() => {
       // Initial Greeting
@@ -72,15 +80,14 @@ function App() {
           if (context.endDate) dateRange += ` - ${context.endDate}`;
       }
 
-      setItinerary(prev => ({
-          ...prev,
+      setItinerary({
+          ...INITIAL_ITINERARY,
           title: displayTitle,
           destination: displayDestination,
           dates: dateRange,
           travelType: derivedTravelType,
           travelers: context.travelers,
-          // We keep days empty until AI generates them, but header info is now set
-      }));
+      });
 
       // GENERATE PROMPT
       const needs = [];
@@ -89,14 +96,12 @@ function App() {
       if (context.needs.car) needs.push("car rental");
       if (context.needs.cruise) needs.push("cruise");
 
-      // Format Travelers
       const travelersParts = [];
       if (context.travelers.adults > 0) travelersParts.push(`${context.travelers.adults} adult${context.travelers.adults > 1 ? 's' : ''}`);
       if (context.travelers.children > 0) travelersParts.push(`${context.travelers.children} child${context.travelers.children > 1 ? 'ren' : ''}`);
       if (context.travelers.infants > 0) travelersParts.push(`${context.travelers.infants} infant${context.travelers.infants > 1 ? 's' : ''}`);
       const travelerStr = travelersParts.join(', ');
 
-      // Format Vibes
       const vibeStr = context.vibes.length > 0 ? context.vibes.join(', ').toLowerCase() + " " : "";
 
       let prompt = "";
@@ -128,39 +133,22 @@ function App() {
           prompt += ` I'd like help booking ${needsStr}.`;
       }
       
-      prompt += " Please suggest an itinerary.";
+      prompt += " Please suggest an itinerary. Start by offering flight and hotel options if needed.";
 
       // Add user message locally
       const userMsg: Message = { id: Date.now().toString(), role: 'user', text: prompt };
       setMessages(prev => [...prev, userMsg]);
       setIsTyping(true);
-      setSelectedSuggestions(new Set()); // Clear suggestions
+      setSelectedSuggestions(new Set());
+      setPendingChoices([]);
       
       try {
-        const responseText = await geminiService.sendMessage(
-            prompt, 
-            (partialUpdate) => setItinerary(prev => ({...prev, ...partialUpdate})),
-            (suggestions) => {
-                 // We will attach suggestions to the message object when it's created below
-            }
-        );
-        // We need a way to capture the suggestions from the callback into the message state. 
-        // Since sendMessage is async, the callback runs before this line. 
-        // A cleaner way is to let sendMessage return the structure, but we are keeping it simple.
-        // We will trust that if suggestions came, we'd want to attach them to this message.
-        // HOWEVER, since I can't easily modify the return type of sendMessage without larger refactor, 
-        // I will use a ref or state update. But wait, setMessages is here.
-        
-        // Actually, let's just make the callback update the LAST message's suggestions.
-        // But the message doesn't exist yet in state.
-        // FIX: I will capture suggestions in a local variable via the callback.
         let capturedSuggestions: string[] | undefined = undefined;
-        
-        // Re-call with capture
         const text = await geminiService.sendMessage(
              prompt, 
              (partialUpdate) => setItinerary(prev => ({...prev, ...partialUpdate})),
-             (s) => { capturedSuggestions = s; }
+             (s) => { capturedSuggestions = s; },
+             (options) => { setPendingChoices(options); }
         );
 
         const aiMsg: Message = { 
@@ -182,7 +170,6 @@ function App() {
     let finalInput = text;
     if (selectedSuggestions.size > 0) {
         const selectedList = Array.from(selectedSuggestions);
-        // Format as natural language sentence
         const suggestionsText = selectedList.length === 1 
             ? selectedList[0] 
             : selectedList.slice(0, -1).join(', ') + ' and ' + selectedList[selectedList.length - 1];
@@ -197,7 +184,8 @@ function App() {
     setMessages(prev => [...prev, userMsg]);
     setIsTyping(true);
     setInputValue('');
-    setSelectedSuggestions(new Set()); // Clear selections
+    setSelectedSuggestions(new Set());
+    setPendingChoices([]);
 
     try {
       let capturedSuggestions: string[] | undefined = undefined;
@@ -205,7 +193,8 @@ function App() {
       const responseText = await geminiService.sendMessage(
           finalInput, 
           (partialUpdate) => setItinerary(prev => ({...prev, ...partialUpdate})),
-          (s) => { capturedSuggestions = s; }
+          (s) => { capturedSuggestions = s; },
+          (options) => { setPendingChoices(options); }
       );
 
       // Add AI Message
@@ -258,6 +247,11 @@ function App() {
       handleSendMessage(prompt);
   };
   
+  const handleRemoveActivity = (activity: Activity, date: string) => {
+      const prompt = `Please remove "${activity.title}" from the itinerary on ${date}.`;
+      handleSendMessage(prompt);
+  };
+  
   const handleToggleSuggestion = (suggestion: string) => {
       setSelectedSuggestions(prev => {
           const newSet = new Set(prev);
@@ -268,6 +262,13 @@ function App() {
           }
           return newSet;
       });
+  };
+  
+  const handleSelectChoice = (activity: Activity) => {
+      setPendingChoices([]); // Clear options
+      // Inform AI of the choice so it can update the structured state
+      const prompt = `I have selected the option "${activity.title}". Please add it to my itinerary plan and remove the other options.`;
+      handleSendMessage(prompt);
   };
 
   return (
@@ -377,8 +378,11 @@ function App() {
            <div className="h-full md:rounded-3xl md:bg-white md:shadow-sm md:border md:border-gray-100 overflow-hidden md:p-6 p-4">
              <ItineraryView 
                 data={itinerary} 
+                pendingChoices={pendingChoices}
+                onSelectChoice={handleSelectChoice}
                 onToggleLock={handleToggleLock} 
                 onRegenerate={handleRegenerate}
+                onRemove={handleRemoveActivity}
              />
            </div>
         </div>

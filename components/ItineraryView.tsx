@@ -1,18 +1,29 @@
 import React, { useState } from 'react';
 import { Itinerary, TravelType, Activity } from '../types';
+import { ChoiceCard } from './ChoiceCard';
 import { 
   CalendarIcon, MapIcon, UserGroupIcon, ShareIcon, 
   PlaneIcon, HotelIcon, SparklesIcon, DiningIcon, TransitIcon, LogisticsIcon,
-  LockIcon, RefreshIcon
+  LockIcon, RefreshIcon, ExternalLinkIcon, TrashIcon
 } from './Icons';
 
 interface ItineraryViewProps {
   data: Itinerary;
+  pendingChoices?: Activity[];
+  onSelectChoice?: (activity: Activity) => void;
   onToggleLock: (activity: Activity) => void;
   onRegenerate: (activity: Activity, date: string) => void;
+  onRemove: (activity: Activity, date: string) => void;
 }
 
-const ActivityItem: React.FC<{ activity: Activity, date: string, onToggleLock: (a: Activity) => void, onRegenerate: (a: Activity, d: string) => void }> = ({ activity, date, onToggleLock, onRegenerate }) => {
+const ActivityItem: React.FC<{ 
+    activity: Activity, 
+    date: string, 
+    destination: string,
+    onToggleLock: (a: Activity) => void, 
+    onRegenerate: (a: Activity, d: string) => void,
+    onRemove: (a: Activity, d: string) => void
+}> = ({ activity, date, destination, onToggleLock, onRegenerate, onRemove }) => {
     let Icon = SparklesIcon;
     let iconColorClass = "text-purple-600";
     let iconBgClass = "bg-purple-100";
@@ -65,6 +76,25 @@ const ActivityItem: React.FC<{ activity: Activity, date: string, onToggleLock: (
         // Fallback to text placeholder if image fails
         setImgSrc(`https://placehold.co/600x400/e2e8f0/475569?text=${encodeURIComponent(activity.title)}`);
     };
+
+    const getBookingUrl = () => {
+        const qTitle = encodeURIComponent(activity.title);
+        const qDest = encodeURIComponent(destination);
+        const qDate = encodeURIComponent(date);
+
+        switch (activity.category) {
+            case 'flight':
+                return `https://www.google.com/travel/flights?q=flight+to+${qDest}+on+${qDate}`;
+            case 'accommodation':
+                return `https://www.google.com/travel/hotels?q=${qTitle}+${qDest}`;
+            case 'dining':
+                return `https://www.google.com/search?q=${qTitle}+${qDest}+reservation`;
+            default:
+                return `https://www.google.com/search?q=${qTitle}+${qDest}`;
+        }
+    };
+
+    const bookingUrl = getBookingUrl();
 
     return (
         <div className={`group bg-white rounded-xl border transition-all hover:shadow-md overflow-hidden relative ${isLocked ? 'border-amber-400 ring-1 ring-amber-100' : 'border-gray-100 shadow-sm'}`}>
@@ -131,27 +161,45 @@ const ActivityItem: React.FC<{ activity: Activity, date: string, onToggleLock: (
             {/* Action Buttons (Overlay) */}
             <div className="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                 {!isLocked && (
-                    <button 
-                        onClick={() => onRegenerate(activity, date)}
-                        className="p-1.5 bg-white shadow-md rounded-full text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
-                        title="Regenerate this option"
-                    >
-                        <RefreshIcon className="w-4 h-4" />
-                    </button>
+                    <>
+                        <button 
+                            onClick={() => onRegenerate(activity, date)}
+                            className="p-1.5 bg-white shadow-md rounded-full text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors flex items-center justify-center"
+                            title="Regenerate this option"
+                        >
+                            <RefreshIcon className="w-4 h-4" />
+                        </button>
+                        <button 
+                            onClick={() => onRemove(activity, date)}
+                            className="p-1.5 bg-white shadow-md rounded-full text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors flex items-center justify-center"
+                            title="Remove from itinerary"
+                        >
+                            <TrashIcon className="w-4 h-4" />
+                        </button>
+                    </>
                 )}
                 <button 
                     onClick={() => onToggleLock(activity)}
-                    className={`p-1.5 shadow-md rounded-full transition-colors ${isLocked ? 'bg-amber-100 text-amber-600 hover:bg-amber-200' : 'bg-white text-gray-400 hover:text-amber-500 hover:bg-amber-50'}`}
+                    className={`p-1.5 shadow-md rounded-full transition-colors flex items-center justify-center ${isLocked ? 'bg-amber-100 text-amber-600 hover:bg-amber-200' : 'bg-white text-gray-400 hover:text-amber-500 hover:bg-amber-50'}`}
                     title={isLocked ? "Unlock" : "Save / Lock in"}
                 >
                     <LockIcon className="w-4 h-4" />
                 </button>
+                <a
+                    href={bookingUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-1.5 bg-white shadow-md rounded-full text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors flex items-center justify-center"
+                    title="Smart Booking / Search"
+                >
+                    <ExternalLinkIcon className="w-4 h-4" />
+                </a>
             </div>
         </div>
     );
 };
 
-export const ItineraryView: React.FC<ItineraryViewProps> = ({ data, onToggleLock, onRegenerate }) => {
+export const ItineraryView: React.FC<ItineraryViewProps> = ({ data, pendingChoices, onSelectChoice, onToggleLock, onRegenerate, onRemove }) => {
     
     // Header Section
     const Header = () => (
@@ -204,6 +252,13 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({ data, onToggleLock
         <div className="h-full flex flex-col overflow-y-auto no-scrollbar pb-20 relative">
             <Header />
 
+            {/* CHOICE CARD SECTION */}
+            {pendingChoices && pendingChoices.length > 0 && onSelectChoice && (
+                <div className="mb-8 animate-fade-in-down">
+                    <ChoiceCard options={pendingChoices} onSelect={onSelectChoice} />
+                </div>
+            )}
+
             {data.days.length === 0 ? <EmptyState /> : (
                 <div className="space-y-8 pb-32">
                     {data.days.map((day, index) => (
@@ -221,8 +276,10 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({ data, onToggleLock
                                         key={actIndex} 
                                         activity={activity} 
                                         date={day.date}
+                                        destination={data.destination}
                                         onToggleLock={onToggleLock}
                                         onRegenerate={onRegenerate}
+                                        onRemove={onRemove}
                                     />
                                 ))}
                             </div>

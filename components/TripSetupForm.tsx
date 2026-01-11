@@ -41,7 +41,7 @@ interface TripSetupFormProps {
 }
 
 const VIBE_OPTIONS = [
-    "Relaxed", "Adventure", "Family", "Romantic", 
+    "Relaxed", "Adventure", "Family", "Fun", "Romantic", 
     "Cultural", "Nightlife", "Luxury", "Budget", "Foodie",
     "Work", "Honeymoon", "Party"
 ];

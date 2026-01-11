@@ -1,0 +1,5 @@
+{
+  "name": "Itinerary",
+  "description": "A centralized AI travel planner designed with Apple's Human Interface Guidelines. Chat to plan trips, flights, hotels, and events.",
+  "requestFramePermissions": []
+}
